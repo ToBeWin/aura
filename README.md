@@ -143,11 +143,6 @@ Next:
 - More curated model recommendations
 - Official Windows / Linux releases
 
-## Maintainer
-
-Maintainer: **ToBeWin**  
-Email: **jingyecn@gmail.com**
-
 ## License
 
 MIT
