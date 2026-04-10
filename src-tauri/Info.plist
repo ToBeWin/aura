@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>Aura</string>
+  <key>CFBundleDisplayName</key>
+  <string>Aura</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Aura uses the microphone to capture spoken drafts.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Aura uses speech recognition to transcribe spoken drafts and voice edits.</string>
+</dict>
+</plist>

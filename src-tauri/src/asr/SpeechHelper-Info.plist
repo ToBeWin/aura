@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key>
+  <string>AuraSpeechHelper</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.bingo.aura.speech-helper</string>
+  <key>CFBundleName</key>
+  <string>Aura Speech Helper</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Aura uses speech recognition to transcribe local audio files.</string>
+</dict>
+</plist>

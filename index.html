@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/src-tauri/icons/128x128.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aura</title>
+    <script>
+      (() => {
+        const windowKind = window.location.hash === "#capsule" ? "capsule" : "dashboard";
+        document.documentElement.dataset.auraWindow = windowKind;
+      })();
+    </script>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+
+      html,
+      body,
+      #root {
+        margin: 0;
+        min-height: 100vh;
+        background: #f8f7f4;
+      }
+
+      html[data-aura-window="capsule"],
+      html[data-aura-window="capsule"] body,
+      html[data-aura-window="capsule"] #root {
+        background: transparent;
+      }
+
+      body {
+        font-family: "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
+      }
+
+      .boot-shell {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background:
+          radial-gradient(circle at top, rgba(255, 255, 255, 0.9), rgba(248, 247, 244, 0) 42%),
+          #f8f7f4;
+      }
+
+      html[data-aura-window="capsule"] .boot-shell {
+        display: none;
+      }
+
+      .boot-card {
+        width: min(520px, calc(100vw - 64px));
+        padding: 28px 32px;
+        border-radius: 32px;
+        background: rgba(255, 255, 255, 0.82);
+        border: 1px solid rgba(24, 24, 24, 0.06);
+        box-shadow:
+          0 24px 60px rgba(24, 24, 24, 0.08),
+          0 1px 0 rgba(255, 255, 255, 0.82) inset;
+        backdrop-filter: blur(20px);
+      }
+
+      .boot-kicker {
+        font-size: 12px;
+        letter-spacing: 0.28em;
+        text-transform: uppercase;
+        color: rgba(24, 24, 24, 0.38);
+        margin-bottom: 18px;
+      }
+
+      .boot-title {
+        font-size: 44px;
+        line-height: 1.02;
+        font-weight: 650;
+        color: #151515;
+        margin: 0;
+      }
+
+      .boot-copy {
+        margin-top: 12px;
+        font-size: 18px;
+        line-height: 1.6;
+        color: rgba(24, 24, 24, 0.54);
+      }
+
+      .boot-row {
+        margin-top: 26px;
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 16px;
+        border-radius: 999px;
+        background: rgba(24, 24, 24, 0.04);
+        color: rgba(24, 24, 24, 0.68);
+        font-size: 14px;
+      }
+
+      .boot-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: #151515;
+        animation: bootPulse 0.9s ease-in-out infinite;
+      }
+
+      @keyframes bootPulse {
+        0%, 100% {
+          opacity: 0.26;
+          transform: scale(0.82);
+        }
+        50% {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root">
+      <div class="boot-shell">
+        <div class="boot-card">
+          <div class="boot-kicker">Aura</div>
+          <h1 class="boot-title">Preparing your workspace</h1>
+          <div class="boot-copy">
+            Loading settings, voice pipeline, and recent history.
+          </div>
+          <div class="boot-row">
+            <span class="boot-dot" aria-hidden="true"></span>
+            <span>Starting Aura</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

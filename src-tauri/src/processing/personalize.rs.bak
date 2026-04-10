@@ -1,0 +1,199 @@
+use crate::errors::Result;
+use crate::llm::{LocalLLM, PromptTemplates};
+use crate::models::{AppliedRule, PersonalizeResult, UserContext};
+use crate::storage::{LocalVectorDB, UserContextStore};
+
+pub struct PersonalizationEngine {
+    llm: LocalLLM,
+    vector_db: LocalVectorDB,
+    context_store: UserContextStore,
+}
+
+impl PersonalizationEngine {
+    pub fn new(llm: LocalLLM, vector_db: LocalVectorDB, context_store: UserContextStore) -> Self {
+        Self {
+            llm,
+            vector_db,
+            context_store,
+        }
+    }
+
+    pub async fn personalize(&self, formatted_text: &str, user_id: &str) -> Result<PersonalizeResult> {
+        // Load user context
+        let user_context = self.context_store.get_context(user_id)
+            .unwrap_or_else(|_| UserContext {
+                user_id: user_id.to_string(),
+                name_mappings: Default::default(),
+                location_preferences: Default::default(),
+                terminology: Default::default(),
+                forbidden_words: vec![],
+                default_tone: "professional".to_string(),
+                default_format: None,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            });
+
+        // Retrieve correction rules
+        let correction_rules = self.retrieve_correction_rules(formatted_text, user_id).await?;
+
+        // Apply personalization
+        let (personalized_text, applied_rules) = self.apply_personalization(
+            formatted_text,
+            &user_context,
+            &correction_rules,
+        ).await?;
+
+        let context_used: Vec<String> = vec![
+            "name_mappings".to_string(),
+            "location_preferences".to_string(),
+            "terminology".to_string(),
+        ];
+
+        let confidence = self.calculate_confidence(&applied_rules);
+
+        Ok(PersonalizeResult {
+            refined_output: personalized_text,
+            applied_rules,
+            context_used,
+            confidence,
+        })
+    }
+
+    async fn retrieve_correction_rules(&self, text: &str, user_id: &str) -> Result<Vec<CorrectionRule>> {
+        // Generate embedding for the input text
+        let embedding = match self.llm.embed(text).await {
+            Ok(emb) => emb,
+            Err(_) => return Ok(vec![]),
+        };
+
+        // Search for similar corrections in vector DB
+        let filter = std::collections::HashMap::from([
+            ("user_id".to_string(), user_id.to_string()),
+        ]);
+        let results = match self.vector_db.search("corrections", embedding, Some(filter), 5) {
+            Ok(r) => r,
+            Err(_) => return Ok(vec![]),
+        };
+
+        // Convert results to correction rules
+        let rules: Vec<CorrectionRule> = results
+            .into_iter()
+            .filter_map(|r| {
+                let pattern = r.metadata.get("pattern")?.clone();
+                let replacement = r.metadata.get("replacement")?.clone();
+                let timestamp_str = r.metadata.get("timestamp")?;
+                let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp_str)
+                    .ok()?
+                    .with_timezone(&chrono::Utc);
+                let context = r.metadata.get("context")
+                    .map(|s| {
+                        serde_json::from_str(s).unwrap_or_default()
+                    })
+                    .unwrap_or_default();
+
+                Some(CorrectionRule {
+                    pattern,
+                    replacement,
+                    context,
+                    timestamp,
+                })
+            })
+            .collect();
+
+        Ok(rules)
+    }
+
+    async fn apply_personalization(
+        &self,
+        text: &str,
+        user_context: &UserContext,
+        correction_rules: &[CorrectionRule],
+    ) -> Result<(String, Vec<AppliedRule>)> {
+        let mut current_text = text.to_string();
+        let mut applied_rules = Vec::new();
+
+        // Apply name mappings
+        for (short_name, full_name) in &user_context.name_mappings {
+            if current_text.contains(short_name) {
+                current_text = current_text.replace(short_name, full_name);
+                applied_rules.push(AppliedRule {
+                    rule_type: "name_mapping".to_string(),
+                    from: short_name.clone(),
+                    to: full_name.clone(),
+                });
+            }
+        }
+
+        // Apply location preferences
+        for (short_loc, full_loc) in &user_context.location_preferences {
+            if current_text.contains(short_loc) {
+                current_text = current_text.replace(short_loc, full_loc);
+                applied_rules.push(AppliedRule {
+                    rule_type: "location_expansion".to_string(),
+                    from: short_loc.clone(),
+                    to: full_loc.clone(),
+                });
+            }
+        }
+
+        // Apply terminology
+        for (term, preferred) in &user_context.terminology {
+            if current_text.contains(term) {
+                current_text = current_text.replace(term, preferred);
+                applied_rules.push(AppliedRule {
+                    rule_type: "terminology".to_string(),
+                    from: term.clone(),
+                    to: preferred.clone(),
+                });
+            }
+        }
+
+        // Apply correction rules
+        for rule in correction_rules {
+            if current_text.contains(&rule.pattern) {
+                current_text = current_text.replace(&rule.pattern, &rule.replacement);
+                applied_rules.push(AppliedRule {
+                    rule_type: "correction_rule".to_string(),
+                    from: rule.pattern.clone(),
+                    to: rule.replacement.clone(),
+                });
+            }
+        }
+
+        // LLM final optimization
+        let final_text = self.llm_personalize(&current_text, user_context, correction_rules).await?;
+
+        Ok((final_text, applied_rules))
+    }
+
+    async fn llm_personalize(
+        &self,
+        text: &str,
+        user_context: &UserContext,
+        correction_rules: &[CorrectionRule],
+    ) -> Result<String> {
+        let context_str = serde_json::to_string_pretty(user_context)?;
+        let rules_str = serde_json::to_string_pretty(&correction_rules.iter().take(3).collect::<Vec<_>>())?;
+        
+        let prompt = PromptTemplates::personalize(text, &context_str, &rules_str);
+        self.llm.generate(&prompt, None, Some(2048), 0.4).await
+    }
+
+    fn calculate_confidence(&self, applied_rules: &[AppliedRule]) -> f64 {
+        if applied_rules.is_empty() {
+            0.5
+        } else {
+            (0.5 + (applied_rules.len() as f64 * 0.15).min(0.5)).min(1.0)
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct CorrectionRule {
+    pattern: String,
+    replacement: String,
+    context: HashMap<String, String>,
+    timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+use std::collections::HashMap;

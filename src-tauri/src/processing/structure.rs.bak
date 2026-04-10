@@ -1,0 +1,117 @@
+use crate::errors::Result;
+use crate::llm::{LocalLLM, PromptTemplates};
+use crate::models::StructureResult;
+use std::collections::HashMap;
+
+#[derive(Clone)]
+pub struct StructureMapper {
+    llm: LocalLLM,
+}
+
+impl StructureMapper {
+    pub fn new(llm: LocalLLM) -> Self {
+        Self { llm }
+    }
+
+    pub async fn map_structure(
+        &self,
+        cleaned_text: &str,
+        output_format: Option<&str>,
+        tone: &str,
+    ) -> Result<StructureResult> {
+        // Auto-infer format if not specified
+        let format = if let Some(f) = output_format {
+            f.to_string()
+        } else {
+            self.infer_format(cleaned_text).await?
+        };
+
+        // Apply format template
+        let formatted = self.apply_format(cleaned_text, &format, tone).await?;
+        
+        // Extract metadata
+        let metadata = self.extract_metadata(&formatted, &format);
+
+        Ok(StructureResult {
+            formatted_text: formatted,
+            detected_format: format,
+            applied_tone: tone.to_string(),
+            structure_metadata: metadata,
+        })
+    }
+
+    async fn infer_format(&self, text: &str) -> Result<String> {
+        let prompt = PromptTemplates::infer_format(text);
+        let result = self.llm.generate(&prompt, None, Some(50), 0.1).await?;
+        
+        let format = result.trim().to_lowercase();
+        let valid_formats = ["email", "weekly_report", "social_media", "code_comment"];
+        
+        if valid_formats.contains(&format.as_str()) {
+            Ok(format)
+        } else {
+            Ok("email".to_string())
+        }
+    }
+
+    async fn apply_format(&self, text: &str, format_type: &str, tone: &str) -> Result<String> {
+        let system_prompt = PromptTemplates::format_system_prompt(format_type);
+        let prompt = PromptTemplates::structure(text, format_type, tone);
+        
+        self.llm.generate(&prompt, Some(system_prompt), Some(2048), 0.5).await
+    }
+
+    fn extract_metadata(&self, formatted_text: &str, format_type: &str) -> HashMap<String, serde_json::Value> {
+        let mut metadata = HashMap::new();
+        
+        if format_type == "email" {
+            metadata.extend(self.extract_email_metadata(formatted_text));
+        } else if format_type == "weekly_report" {
+            metadata.extend(self.extract_report_metadata(formatted_text));
+        }
+        
+        metadata
+    }
+
+    pub fn extract_email_metadata(&self, text: &str) -> HashMap<String, serde_json::Value> {
+        let mut metadata = HashMap::new();
+        
+        for line in text.lines() {
+            if line.starts_with("主题：") || line.starts_with("Subject:") {
+                let subject = line.split(['：', ':']).nth(1).unwrap_or("").trim();
+                metadata.insert("subject".to_string(), serde_json::Value::String(subject.to_string()));
+            } else if line.starts_with("收件人：") || line.starts_with("To:") {
+                let recipient = line.split(['：', ':']).nth(1).unwrap_or("").trim();
+                metadata.insert("recipient".to_string(), serde_json::Value::String(recipient.to_string()));
+            }
+        }
+        
+        metadata
+    }
+
+    fn extract_report_metadata(&self, _text: &str) -> HashMap<String, serde_json::Value> {
+        HashMap::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_email_metadata_with_subject_and_recipient() {
+        let text = "主题：测试会议\n收件人：苏总\n\n正文内容";
+        let mapper = StructureMapper::new(crate::llm::LocalLLM::new("test".to_string()));
+        let meta = mapper.extract_email_metadata(text);
+        assert_eq!(meta.get("subject").unwrap().as_str().unwrap(), "测试会议");
+        assert_eq!(meta.get("recipient").unwrap().as_str().unwrap(), "苏总");
+    }
+
+    #[test]
+    fn test_extract_email_metadata_empty() {
+        let text = "Hello world no metadata";
+        let mapper = StructureMapper::new(crate::llm::LocalLLM::new("test".to_string()));
+        let meta = mapper.extract_email_metadata(text);
+        assert!(meta.is_empty());
+    }
+}
