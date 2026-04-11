@@ -154,7 +154,7 @@ fn paste_into_focused_input_if_possible() -> std::io::Result<Option<bool>> {
                 .args([
                     "-e",
                     &format!(
-                        "tell application id \"{}\" to activate\n delay 0.05",
+                        "tell application \"System Events\" to set frontmost of (first application process whose bundle identifier is \"{}\") to true\n delay 0.05",
                         bundle_id
                     ),
                 ])
@@ -179,8 +179,8 @@ tell application "System Events"
             return "pasted"
         end if
         return "not_editable"
-    on error
-        return "error"
+    on error errMsg number errNum
+        return "error:" & errNum & ":" & errMsg
     end try
 
     return "not_editable"
@@ -193,8 +193,8 @@ tell application "System Events"
     try
         keystroke "v" using command down
         return "pasted"
-    on error
-        return "error"
+    on error errMsg number errNum
+        return "error:" & errNum & ":" & errMsg
     end try
 end tell
 "#;
@@ -220,7 +220,11 @@ end tell
             return Ok(None);
         }
 
-        log::info!("[Aura] Auto-paste script result (attempt {}): {}", attempt + 1, status);
+        if status.starts_with("error:") {
+            log::warn!("[Aura] Auto-paste script result (attempt {}): {}", attempt + 1, status);
+        } else {
+            log::info!("[Aura] Auto-paste script result (attempt {}): {}", attempt + 1, status);
+        }
         if status == "pasted" {
             return Ok(Some(true));
         }
@@ -239,11 +243,19 @@ end tell
             return Ok(None);
         }
 
-        log::info!(
-            "[Aura] Auto-paste fallback result (attempt {}): {}",
-            attempt + 1,
-            fallback_status
-        );
+        if fallback_status.starts_with("error:") {
+            log::warn!(
+                "[Aura] Auto-paste fallback result (attempt {}): {}",
+                attempt + 1,
+                fallback_status
+            );
+        } else {
+            log::info!(
+                "[Aura] Auto-paste fallback result (attempt {}): {}",
+                attempt + 1,
+                fallback_status
+            );
+        }
         if fallback_status == "pasted" {
             return Ok(Some(true));
         }
