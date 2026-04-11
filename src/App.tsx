@@ -658,6 +658,7 @@ function CapsuleApp() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [statusMsg, setStatusMsg] = useState("");
   const [accessibilityNeeded, setAccessibilityNeeded] = useState(false);
+  const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
   const outputMode: OutputMode = "note";
 
   const recorder = useRef<MediaRecorder | null>(null);
@@ -991,7 +992,7 @@ function CapsuleApp() {
         console.warn("[Aura] Failed to persist history entry", historyError);
       }
 
-      const needsAccessibility = /accessibility/i.test(pasteResult.message || "");
+      const needsAccessibility = !delivered && isMac;
       const doneMessage = delivered
         ? ui.statuses.pasted
         : normalizeStatusMessage(pasteResult.message || ui.statuses.copied, locale);
@@ -1000,7 +1001,9 @@ function CapsuleApp() {
         if (!delivered && needsAccessibility) {
           setAccessibilityNeeded(true);
           setState("error");
-          setStatusMsg(ui.statuses.accessibilityPrompt);
+          setStatusMsg(
+            normalizeStatusMessage(pasteResult.message || ui.statuses.accessibilityPrompt, locale),
+          );
           setTimeout(() => {
             setState("idle");
             setStatusMsg("");
