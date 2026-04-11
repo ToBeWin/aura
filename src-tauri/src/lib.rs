@@ -887,7 +887,7 @@ async fn reshape_text(
 
 /// Set clipboard + platform-specific paste shortcut
 #[tauri::command]
-async fn type_text(text: String) -> Result<PasteResult, String> {
+async fn type_text(text: String, app: tauri::AppHandle) -> Result<PasteResult, String> {
     let delivered_text = normalize_to_simplified_chinese(&text);
     log::info!(
         "[Aura] Preparing delivery for {} chars",
@@ -902,6 +902,20 @@ async fn type_text(text: String) -> Result<PasteResult, String> {
 
     #[cfg(target_os = "macos")]
     {
+        if let Some(window) = app.get_webview_window("capsule") {
+            let _ = window.hide();
+        }
+
+        if let Some(bundle_id) = last_focused_app().lock().ok().and_then(|guard| guard.clone()) {
+            if bundle_id != AURA_BUNDLE_ID {
+                log::info!("[Aura] Re-activating target app {}", bundle_id);
+                let _ = std::process::Command::new("open")
+                    .args(["-b", &bundle_id])
+                    .output();
+            }
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(180)).await;
         tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
         if send_paste_shortcut().is_ok() {
             log::info!("[Aura] Delivery: pasted via CGEvent");
