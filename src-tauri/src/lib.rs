@@ -38,6 +38,12 @@ use tauri::PhysicalSize;
 use tauri::State;
 use tauri::utils::config::Color;
 use std::sync::{Mutex, OnceLock};
+#[cfg(target_os = "macos")]
+use core_graphics::event::{
+    CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGKeyCode,
+};
+#[cfg(target_os = "macos")]
+use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
 struct AppState {
     aura_core: tokio::sync::Mutex<Option<Arc<AuraCore>>>,
@@ -899,11 +905,8 @@ async fn type_text(text: String) -> Result<PasteResult, String> {
     #[cfg(target_os = "macos")]
     {
         tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
-        let paste_attempt = paste_into_focused_input_if_possible()
-            .map_err(|e| format!("osascript: {:?}", e))?;
-
-        if matches!(paste_attempt, Some(true)) {
-            log::info!("[Aura] Delivery: pasted into focused input");
+        if send_paste_shortcut().is_ok() {
+            log::info!("[Aura] Delivery: pasted via CGEvent");
             return Ok(PasteResult {
                 text: delivered_text,
                 delivered: true,
@@ -912,22 +915,12 @@ async fn type_text(text: String) -> Result<PasteResult, String> {
             });
         }
 
-        if paste_attempt.is_none() {
-            log::warn!("[Aura] Delivery: clipboard only because auto-paste failed");
-            return Ok(PasteResult {
-                text: delivered_text,
-                delivered: false,
-                copied_to_clipboard: true,
-                message: "Copied to clipboard. Auto-paste failed. Enable Automation permission (System Events) and focus a text input.".to_string(),
-            });
-        }
-
-        log::info!("[Aura] Delivery: clipboard only because focused element is not editable");
+        log::warn!("[Aura] Delivery: clipboard only because CGEvent paste failed");
         return Ok(PasteResult {
             text: delivered_text,
             delivered: false,
             copied_to_clipboard: true,
-            message: "Copied to clipboard. Focus a text input to paste automatically.".to_string(),
+            message: "Copied to clipboard. Enable Accessibility permission for Aura and focus a text input.".to_string(),
         });
     }
 
@@ -981,6 +974,22 @@ async fn type_text(text: String) -> Result<PasteResult, String> {
         copied_to_clipboard: true,
         message: "Copied to clipboard.".to_string(),
     })
+}
+
+#[cfg(target_os = "macos")]
+fn send_paste_shortcut() -> Result<(), String> {
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+        .map_err(|_| "CGEventSource init failed".to_string())?;
+    let keycode_v: CGKeyCode = 0x09;
+    let mut key_down = CGEvent::new_keyboard_event(source.clone(), keycode_v, true)
+        .ok_or_else(|| "Failed to create key down event".to_string())?;
+    key_down.set_flags(CGEventFlags::CGEventFlagMaskCommand);
+    key_down.post(CGEventTapLocation::HID);
+
+    let key_up = CGEvent::new_keyboard_event(source, keycode_v, false)
+        .ok_or_else(|| "Failed to create key up event".to_string())?;
+    key_up.post(CGEventTapLocation::HID);
+    Ok(())
 }
 
 #[tauri::command]
