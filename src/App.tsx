@@ -1619,7 +1619,6 @@ function DashboardApp() {
               </label>
             </div>
             {settingsPath && <div className="panel-note">{ui.dashboard.settingsFile}: {settingsPath}</div>}
-            <div className="panel-note">{ui.dashboard.logsTitle}</div>
             <div className="field-grid compact-top">
               <label>
                 <span>{ui.dashboard.logsTitle}</span>
