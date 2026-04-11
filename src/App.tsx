@@ -141,6 +141,7 @@ const UI = {
       downloaded: (name: string) => `已下载 ${name}`,
       pasted: "已输入",
       copied: "已复制到剪贴板",
+      accessibilityPrompt: "未开启辅助功能权限，已复制到剪贴板",
       cancel: "取消",
       checkingInput: "正在检测输入设备...",
     },
@@ -261,6 +262,7 @@ const UI = {
       downloaded: (name: string) => `Downloaded ${name}`,
       pasted: "Inserted",
       copied: "Copied to clipboard",
+      accessibilityPrompt: "Accessibility permission is required for auto-paste. Copied to clipboard.",
       cancel: "Cancel",
       checkingInput: "Checking audio input...",
     },
@@ -655,6 +657,7 @@ function CapsuleApp() {
   const [state, setState] = useState<State>("initializing");
   const [audioLevel, setAudioLevel] = useState(0);
   const [statusMsg, setStatusMsg] = useState("");
+  const [accessibilityNeeded, setAccessibilityNeeded] = useState(false);
   const outputMode: OutputMode = "note";
 
   const recorder = useRef<MediaRecorder | null>(null);
@@ -788,6 +791,7 @@ function CapsuleApp() {
 
   async function closeCapsule() {
     setAudioLevel(0);
+    setAccessibilityNeeded(false);
     hideOnIdle.current = true;
     try {
       await invoke("hide_capsule_window");
@@ -804,6 +808,7 @@ function CapsuleApp() {
     cancelRequested.current = true;
     pipelineRunId.current += 1;
     setStatusMsg("");
+    setAccessibilityNeeded(false);
 
     if (recorder.current && recorder.current.state !== "inactive") {
       await stopRecording("local");
@@ -821,6 +826,7 @@ function CapsuleApp() {
     cancelRequested.current = false;
     hideOnIdle.current = true;
     setStatusMsg("");
+    setAccessibilityNeeded(false);
     setState("listening");
     chunks.current = [];
 
@@ -985,11 +991,24 @@ function CapsuleApp() {
         console.warn("[Aura] Failed to persist history entry", historyError);
       }
 
+      const needsAccessibility = /accessibility/i.test(pasteResult.message || "");
       const doneMessage = delivered
         ? ui.statuses.pasted
         : normalizeStatusMessage(pasteResult.message || ui.statuses.copied, locale);
 
       setTimeout(() => {
+        if (!delivered && needsAccessibility) {
+          setAccessibilityNeeded(true);
+          setState("error");
+          setStatusMsg(ui.statuses.accessibilityPrompt);
+          setTimeout(() => {
+            setState("idle");
+            setStatusMsg("");
+            void closeCapsule();
+          }, timing.current.errorHoldMs);
+          return;
+        }
+
         setState("done");
         setStatusMsg(doneMessage);
         setTimeout(() => {
@@ -1094,12 +1113,23 @@ function CapsuleApp() {
 
         {showStatusStrip && (
           <div className="status-strip">
-            {statusMsg ||
-              (state === "processing"
-                ? ui.statuses.processing
-                : state === "typing"
-                  ? ui.statuses.typing
-                  : "")}
+            <span>
+              {statusMsg ||
+                (state === "processing"
+                  ? ui.statuses.processing
+                  : state === "typing"
+                    ? ui.statuses.typing
+                    : "")}
+            </span>
+            {accessibilityNeeded && (
+              <button
+                type="button"
+                className="status-action"
+                onClick={() => void invoke("open_accessibility_settings")}
+              >
+                {ui.dashboard.openAccessibility}
+              </button>
+            )}
           </div>
         )}
       </div>
