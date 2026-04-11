@@ -10,5 +10,7 @@
   <string>Aura uses the microphone to capture spoken drafts.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Aura uses speech recognition to transcribe spoken drafts and voice edits.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Aura needs Automation permission to paste results into your active app.</string>
 </dict>
 </plist>
