@@ -2,6 +2,7 @@ use crate::errors::{AuraError, Result};
 use crate::models::{ASRCloudProvider, ASRProviderSettings, LocalASRModelStatus, ProviderMode};
 use crate::text::normalize_to_simplified_chinese;
 use base64::Engine;
+use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -351,7 +352,12 @@ impl ASREngine {
             audio_path.with_extension("wav")
         };
 
-        let status = std::process::Command::new("ffmpeg")
+        let ffmpeg_path = Self::locate_ffmpeg().ok_or(AuraError::Processing {
+            message: "ffmpeg not found. Install with `brew install ffmpeg`, or add it to PATH (common paths: /opt/homebrew/bin/ffmpeg, /usr/local/bin/ffmpeg).".to_string(),
+            error_code: "ASR_002".to_string(),
+        })?;
+
+        let status = std::process::Command::new(&ffmpeg_path)
             .args([
                 "-i", audio_path.to_str().unwrap(),
                 "-ar", "16000",
@@ -362,7 +368,7 @@ impl ASREngine {
             ])
             .status()
             .map_err(|e| AuraError::Processing {
-                message: format!("ffmpeg not found: {}. Please install ffmpeg.", e),
+                message: format!("ffmpeg failed to run: {}. Please install ffmpeg.", e),
                 error_code: "ASR_002".to_string(),
             })?;
 
@@ -374,6 +380,32 @@ impl ASREngine {
         }
 
         Ok(output_path)
+    }
+
+    fn locate_ffmpeg() -> Option<PathBuf> {
+        if let Some(path_os) = env::var_os("PATH") {
+            for path in env::split_paths(&path_os) {
+                let candidate = path.join("ffmpeg");
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+
+        let common_paths = [
+            "/opt/homebrew/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/usr/bin/ffmpeg",
+        ];
+
+        for path in common_paths {
+            let candidate = PathBuf::from(path);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+
+        None
     }
 
     /// Read WAV file and produce mono f32 samples for whisper (already 16kHz from ensure_wav)
