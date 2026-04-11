@@ -39,9 +39,7 @@ use tauri::State;
 use tauri::utils::config::Color;
 use std::sync::{Mutex, OnceLock};
 #[cfg(target_os = "macos")]
-use core_graphics::event::{
-    CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGKeyCode,
-};
+use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode};
 #[cfg(target_os = "macos")]
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
@@ -982,14 +980,14 @@ fn send_paste_shortcut() -> Result<(), String> {
         .map_err(|_| "CGEventSource init failed".to_string())?;
     let keycode_v: CGKeyCode = 0x09;
     let mut key_down = CGEvent::new_keyboard_event(source, keycode_v, true)
-        .ok_or_else(|| "Failed to create key down event".to_string())?;
-    key_down.set_flags(CGEventFlags::CGEventFlagMaskCommand);
+        .map_err(|_| "Failed to create key down event".to_string())?;
+    key_down.set_flags(CGEventFlags::CGEventFlagCommand);
     key_down.post(CGEventTapLocation::HID);
 
     let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
         .map_err(|_| "CGEventSource init failed".to_string())?;
     let key_up = CGEvent::new_keyboard_event(source, keycode_v, false)
-        .ok_or_else(|| "Failed to create key up event".to_string())?;
+        .map_err(|_| "Failed to create key up event".to_string())?;
     key_up.post(CGEventTapLocation::HID);
     Ok(())
 }
