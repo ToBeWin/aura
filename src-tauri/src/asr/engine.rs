@@ -352,25 +352,52 @@ impl ASREngine {
             audio_path.with_extension("wav")
         };
 
-        let ffmpeg_path = Self::locate_ffmpeg().ok_or(AuraError::Processing {
-            message: "ffmpeg not found. Install with `brew install ffmpeg`, or add it to PATH (common paths: /opt/homebrew/bin/ffmpeg, /usr/local/bin/ffmpeg).".to_string(),
-            error_code: "ASR_002".to_string(),
-        })?;
-
-        let status = std::process::Command::new(&ffmpeg_path)
-            .args([
-                "-i", audio_path.to_str().unwrap(),
-                "-ar", "16000",
-                "-ac", "1",
-                "-f", "wav",
-                "-y",
-                output_path.to_str().unwrap(),
-            ])
-            .status()
-            .map_err(|e| AuraError::Processing {
-                message: format!("ffmpeg failed to run: {}. Please install ffmpeg.", e),
-                error_code: "ASR_002".to_string(),
-            })?;
+        let status = match Self::locate_ffmpeg() {
+            Some(ffmpeg_path) => std::process::Command::new(&ffmpeg_path)
+                .args([
+                    "-i", audio_path.to_str().unwrap(),
+                    "-ar", "16000",
+                    "-ac", "1",
+                    "-f", "wav",
+                    "-y",
+                    output_path.to_str().unwrap(),
+                ])
+                .status()
+                .map_err(|e| AuraError::Processing {
+                    message: format!("ffmpeg failed to run: {}. Please install ffmpeg.", e),
+                    error_code: "ASR_002".to_string(),
+                })?,
+            None => {
+                if let Some(afconvert_path) = Self::locate_afconvert() {
+                    std::process::Command::new(&afconvert_path)
+                        .args([
+                            "-f",
+                            "WAVE",
+                            "-d",
+                            "LEI16",
+                            "-r",
+                            "16000",
+                            "-c",
+                            "1",
+                            audio_path.to_str().unwrap(),
+                            output_path.to_str().unwrap(),
+                        ])
+                        .status()
+                        .map_err(|e| AuraError::Processing {
+                            message: format!(
+                                "afconvert failed to run: {}. Please install ffmpeg.",
+                                e
+                            ),
+                            error_code: "ASR_002".to_string(),
+                        })?
+                } else {
+                    return Err(AuraError::Processing {
+                        message: "Audio conversion tool not found. Install ffmpeg, or ensure /usr/bin/afconvert is available.".to_string(),
+                        error_code: "ASR_002".to_string(),
+                    });
+                }
+            }
+        };
 
         if !status.success() {
             return Err(AuraError::Processing {
@@ -403,6 +430,19 @@ impl ASREngine {
             if candidate.is_file() {
                 return Some(candidate);
             }
+        }
+
+        None
+    }
+
+    fn locate_afconvert() -> Option<PathBuf> {
+        if !cfg!(target_os = "macos") {
+            return None;
+        }
+
+        let candidate = PathBuf::from("/usr/bin/afconvert");
+        if candidate.is_file() {
+            return Some(candidate);
         }
 
         None
