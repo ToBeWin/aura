@@ -20,6 +20,7 @@ use models::{AppliedRule, CorrectionRecord, HistoryEntry, LLMProviderSettings, L
 use monitoring::ResourceMonitor;
 use history::{append_history, load_history};
 use settings::{
+    aura_data_dir,
     context_db_path as default_context_db_path,
     load_provider_settings,
     normalize_provider_settings,
@@ -1199,7 +1200,11 @@ pub fn run() {
     let mut logger = env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("info"),
     );
-    let _ = logger.format_timestamp_millis().try_init();
+    logger.format_timestamp_millis();
+    if let Some(log_file) = open_log_file() {
+        logger.target(env_logger::Target::Pipe(Box::new(log_file)));
+    }
+    let _ = logger.try_init();
 
     let audio_buf: Arc<std::sync::Mutex<Vec<f32>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
     let audio_buf_for_setup = audio_buf.clone();
@@ -1258,6 +1263,8 @@ pub fn run() {
             type_text,
             hide_capsule_window,
             open_accessibility_settings,
+            get_log_path,
+            open_logs_folder,
             save_correction,
             get_corrections,
             get_user_context,
@@ -1265,4 +1272,34 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn log_path() -> std::path::PathBuf {
+    aura_data_dir().join("logs").join("aura.log")
+}
+
+fn open_log_file() -> Option<std::fs::File> {
+    let path = log_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .ok()
+}
+
+#[tauri::command]
+async fn get_log_path() -> Result<String, String> {
+    Ok(log_path().display().to_string())
+}
+
+#[tauri::command]
+async fn open_logs_folder() -> Result<(), String> {
+    let path = log_path();
+    let folder = path
+        .parent()
+        .ok_or_else(|| "Log folder not found".to_string())?;
+    open::that(folder).map_err(|e| format!("Open logs folder failed: {:?}", e))
 }

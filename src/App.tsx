@@ -224,6 +224,8 @@ const UI = {
       saving: "保存中...",
       saveSettings: "保存设置",
       settingsFile: "配置文件",
+      logsTitle: "日志",
+      openLogs: "打开日志文件夹",
       emptyHistory: "这里会显示最近几次转写和润色结果。",
       delivered: "已输入",
       copied: "已复制",
@@ -345,6 +347,8 @@ const UI = {
       saving: "Saving...",
       saveSettings: "Save settings",
       settingsFile: "Settings file",
+      logsTitle: "Logs",
+      openLogs: "Open logs folder",
       emptyHistory: "Recent transcripts and refined results will appear here.",
       delivered: "Inserted",
       copied: "Copied",
@@ -1134,6 +1138,7 @@ function DashboardApp() {
   const [audioInputLabel, setAudioInputLabel] = useState("");
   const [providerSettings, setProviderSettings] = useState<ProviderSettings>(DEFAULT_PROVIDER_SETTINGS);
   const [settingsPath, setSettingsPath] = useState("");
+  const [logPath, setLogPath] = useState("");
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
   const [historyPage, setHistoryPage] = useState(1);
@@ -1188,6 +1193,12 @@ function DashboardApp() {
           setLocale(providerEnvelope.settings.locale);
         }
         setSettingsPath(providerEnvelope.settingsPath);
+        try {
+          const path = await invoke<string>("get_log_path");
+          setLogPath(path);
+        } catch {
+          // ignore
+        }
         setHistoryItems(history);
         await refreshDiagnostics();
         await refreshLocalLlmModels();
@@ -1608,6 +1619,20 @@ function DashboardApp() {
               </label>
             </div>
             {settingsPath && <div className="panel-note">{ui.dashboard.settingsFile}: {settingsPath}</div>}
+            <div className="panel-note">{ui.dashboard.logsTitle}</div>
+            <div className="field-grid compact-top">
+              <label>
+                <span>{ui.dashboard.logsTitle}</span>
+                <input value={logPath || "-"} readOnly />
+              </label>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => void invoke("open_logs_folder")}
+              >
+                {ui.dashboard.openLogs}
+              </button>
+            </div>
           </section>
           )}
 
