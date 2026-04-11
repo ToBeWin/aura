@@ -657,7 +657,6 @@ function CapsuleApp() {
   const [state, setState] = useState<State>("initializing");
   const [audioLevel, setAudioLevel] = useState(0);
   const [statusMsg, setStatusMsg] = useState("");
-  const [accessibilityNeeded, setAccessibilityNeeded] = useState(false);
   const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
   const outputMode: OutputMode = "note";
 
@@ -674,6 +673,7 @@ function CapsuleApp() {
   const cancelRequested = useRef(false);
   const pipelineRunId = useRef(0);
   const stateRef = useRef<State>("initializing");
+  const accessibilityPrompted = useRef(false);
   const timing = useRef({
     minProcessingMs: 600,
     doneHoldMs: 900,
@@ -792,7 +792,6 @@ function CapsuleApp() {
 
   async function closeCapsule() {
     setAudioLevel(0);
-    setAccessibilityNeeded(false);
     hideOnIdle.current = true;
     try {
       await invoke("hide_capsule_window");
@@ -809,7 +808,6 @@ function CapsuleApp() {
     cancelRequested.current = true;
     pipelineRunId.current += 1;
     setStatusMsg("");
-    setAccessibilityNeeded(false);
 
     if (recorder.current && recorder.current.state !== "inactive") {
       await stopRecording("local");
@@ -827,7 +825,6 @@ function CapsuleApp() {
     cancelRequested.current = false;
     hideOnIdle.current = true;
     setStatusMsg("");
-    setAccessibilityNeeded(false);
     setState("listening");
     chunks.current = [];
 
@@ -999,11 +996,14 @@ function CapsuleApp() {
 
       setTimeout(() => {
         if (!delivered && needsAccessibility) {
-          setAccessibilityNeeded(true);
           setState("error");
           setStatusMsg(
             normalizeStatusMessage(pasteResult.message || ui.statuses.accessibilityPrompt, locale),
           );
+          if (!accessibilityPrompted.current) {
+            accessibilityPrompted.current = true;
+            void invoke("open_accessibility_settings");
+          }
           setTimeout(() => {
             setState("idle");
             setStatusMsg("");
@@ -1124,15 +1124,6 @@ function CapsuleApp() {
                     ? ui.statuses.typing
                     : "")}
             </span>
-            {accessibilityNeeded && (
-              <button
-                type="button"
-                className="status-action"
-                onClick={() => void invoke("open_accessibility_settings")}
-              >
-                {ui.dashboard.openAccessibility}
-              </button>
-            )}
           </div>
         )}
       </div>
