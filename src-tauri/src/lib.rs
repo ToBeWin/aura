@@ -1258,6 +1258,7 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("capsule") {
                 let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
                 let _ = window.set_shadow(false);
+                let _ = window.set_focusable(false);
                 let _ = window.set_size(PhysicalSize::new(CAPSULE_WIDTH, CAPSULE_HEIGHT));
             }
             setup_global_hotkeys(

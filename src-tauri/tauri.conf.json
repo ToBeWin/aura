@@ -42,6 +42,8 @@
         "fullscreen": false,
         "decorations": false,
         "alwaysOnTop": true,
+        "focused": false,
+        "focusable": false,
         "transparent": true,
         "backgroundColor": "#00000000",
         "shadow": false,
