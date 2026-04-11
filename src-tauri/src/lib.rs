@@ -158,7 +158,7 @@ fn paste_into_focused_input_if_possible() -> std::io::Result<Option<bool>> {
                     ),
                 ])
                 .output();
-            std::thread::sleep(std::time::Duration::from_millis(120));
+            std::thread::sleep(std::time::Duration::from_millis(180));
         }
     }
 
@@ -186,31 +186,6 @@ tell application "System Events"
 end tell
 "#;
 
-    let output = std::process::Command::new("osascript")
-        .args(["-e", script])
-        .output()?;
-
-    let status = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-    if !output.status.success() {
-        if !stderr.is_empty() {
-            log::warn!("[Aura] Auto-paste script error: {}", stderr);
-            let lower = stderr.to_lowercase();
-            if lower.contains("not authorized to send apple events")
-                || lower.contains("not authorised to send apple events")
-            {
-                return Ok(None);
-            }
-        }
-        return Ok(None);
-    }
-
-    log::info!("[Aura] Auto-paste script result: {}", status);
-    if status == "pasted" {
-        return Ok(Some(true));
-    }
-
     // Fallback: attempt a direct paste keystroke even if AX role check fails.
     let fallback = r#"
 tell application "System Events"
@@ -223,22 +198,59 @@ tell application "System Events"
 end tell
 "#;
 
-    let fallback_output = std::process::Command::new("osascript")
-        .args(["-e", fallback])
-        .output()?;
+    for attempt in 0..3 {
+        let output = std::process::Command::new("osascript")
+            .args(["-e", script])
+            .output()?;
 
-    let fallback_status = String::from_utf8_lossy(&fallback_output.stdout).trim().to_string();
-    let fallback_err = String::from_utf8_lossy(&fallback_output.stderr).trim().to_string();
+        let status = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
-    if !fallback_output.status.success() {
-        if !fallback_err.is_empty() {
-            log::warn!("[Aura] Auto-paste fallback error: {}", fallback_err);
+        if !output.status.success() {
+            if !stderr.is_empty() {
+                log::warn!("[Aura] Auto-paste script error: {}", stderr);
+                let lower = stderr.to_lowercase();
+                if lower.contains("not authorized to send apple events")
+                    || lower.contains("not authorised to send apple events")
+                {
+                    return Ok(None);
+                }
+            }
+            return Ok(None);
         }
-        return Ok(None);
+
+        log::info!("[Aura] Auto-paste script result (attempt {}): {}", attempt + 1, status);
+        if status == "pasted" {
+            return Ok(Some(true));
+        }
+
+        let fallback_output = std::process::Command::new("osascript")
+            .args(["-e", fallback])
+            .output()?;
+
+        let fallback_status = String::from_utf8_lossy(&fallback_output.stdout).trim().to_string();
+        let fallback_err = String::from_utf8_lossy(&fallback_output.stderr).trim().to_string();
+
+        if !fallback_output.status.success() {
+            if !fallback_err.is_empty() {
+                log::warn!("[Aura] Auto-paste fallback error: {}", fallback_err);
+            }
+            return Ok(None);
+        }
+
+        log::info!(
+            "[Aura] Auto-paste fallback result (attempt {}): {}",
+            attempt + 1,
+            fallback_status
+        );
+        if fallback_status == "pasted" {
+            return Ok(Some(true));
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(180));
     }
 
-    log::info!("[Aura] Auto-paste fallback result: {}", fallback_status);
-    Ok(Some(fallback_status == "pasted"))
+    Ok(Some(false))
 }
 
 #[cfg(target_os = "macos")]
