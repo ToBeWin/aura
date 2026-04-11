@@ -196,6 +196,12 @@ end tell
     if !output.status.success() {
         if !stderr.is_empty() {
             log::warn!("[Aura] Auto-paste script error: {}", stderr);
+            let lower = stderr.to_lowercase();
+            if lower.contains("not authorized to send apple events")
+                || lower.contains("not authorised to send apple events")
+            {
+                return Ok(None);
+            }
         }
         return Ok(None);
     }
@@ -732,7 +738,7 @@ async fn get_environment_diagnostics(
             detail: match permission_state {
                 Some(true) => "Accessibility permission is available, and a text field is focused".to_string(),
                 Some(false) => "Accessibility permission is available. Focus a text input to verify auto-paste".to_string(),
-                None => "Accessibility permission is missing. Aura will fall back to clipboard only".to_string(),
+                None => "Automation permission is missing (System Events). Aura will fall back to clipboard only".to_string(),
             },
         }
     };
@@ -887,7 +893,7 @@ async fn type_text(text: String) -> Result<PasteResult, String> {
                 text: delivered_text,
                 delivered: false,
                 copied_to_clipboard: true,
-                message: "Copied to clipboard. Auto-paste failed. Check Accessibility permission and focus a text input.".to_string(),
+                message: "Copied to clipboard. Auto-paste failed. Enable Automation permission (System Events) and focus a text input.".to_string(),
             });
         }
 

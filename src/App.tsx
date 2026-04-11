@@ -141,7 +141,7 @@ const UI = {
       downloaded: (name: string) => `已下载 ${name}`,
       pasted: "已输入",
       copied: "已复制到剪贴板",
-      accessibilityPrompt: "未开启辅助功能权限，已复制到剪贴板",
+      accessibilityPrompt: "未开启自动化权限（System Events），已复制到剪贴板",
       cancel: "取消",
       checkingInput: "正在检测输入设备...",
     },
@@ -262,7 +262,7 @@ const UI = {
       downloaded: (name: string) => `Downloaded ${name}`,
       pasted: "Inserted",
       copied: "Copied to clipboard",
-      accessibilityPrompt: "Accessibility permission is required for auto-paste. Copied to clipboard.",
+      accessibilityPrompt: "Automation permission (System Events) is required for auto-paste. Copied to clipboard.",
       cancel: "Cancel",
       checkingInput: "Checking audio input...",
     },
@@ -673,7 +673,6 @@ function CapsuleApp() {
   const cancelRequested = useRef(false);
   const pipelineRunId = useRef(0);
   const stateRef = useRef<State>("initializing");
-  const accessibilityPrompted = useRef(false);
   const timing = useRef({
     minProcessingMs: 600,
     doneHoldMs: 900,
@@ -1000,10 +999,6 @@ function CapsuleApp() {
           setStatusMsg(
             normalizeStatusMessage(pasteResult.message || ui.statuses.accessibilityPrompt, locale),
           );
-          if (!accessibilityPrompted.current) {
-            accessibilityPrompted.current = true;
-            void invoke("open_accessibility_settings");
-          }
           setTimeout(() => {
             setState("idle");
             setStatusMsg("");
