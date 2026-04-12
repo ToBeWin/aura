@@ -71,6 +71,20 @@ function zip_app() {
   ditto -c -k --sequesterRsrc --keepParent "$app_path" "$zip_path"
 }
 
+function adhoc_sign_app() {
+  local app_path="$1"
+  if [[ ! -d "$app_path" ]]; then
+    echo "App bundle not found for ad-hoc signing: $app_path"
+    exit 1
+  fi
+
+  codesign \
+    --force \
+    --deep \
+    --sign - \
+    "$app_path"
+}
+
 function build_universal_app() {
   rm -rf "$UNIVERSAL_APP"
   mkdir -p "$(dirname "$UNIVERSAL_APP")"
@@ -167,6 +181,7 @@ require_cmd node
 require_cmd lipo
 require_cmd ditto
 require_cmd hdiutil
+require_cmd codesign
 
 section "Ensuring Rust targets"
 ensure_rust_target "$ARM_TARGET"
@@ -187,6 +202,10 @@ zip_app "$INTEL_APP" "$INTEL_ZIP"
 
 section "Creating universal macOS app"
 build_universal_app
+
+section "Applying required ad-hoc signature"
+adhoc_sign_app "$UNIVERSAL_APP"
+
 zip_app "$UNIVERSAL_APP" "$UNIVERSAL_ZIP"
 
 section "Creating drag-to-Applications DMG"

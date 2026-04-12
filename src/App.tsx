@@ -64,6 +64,7 @@ interface EnvironmentDiagnostics {
   speech: DiagnosticStatus;
   refine: DiagnosticStatus;
   delivery: DiagnosticStatus;
+  runtime: DiagnosticStatus;
 }
 
 interface ASRProviderSettings {
@@ -158,7 +159,7 @@ const UI = {
       diagnostics: "环境诊断",
       refreshDiagnostics: "刷新诊断",
       refreshingDiagnostics: "刷新中...",
-      openAccessibility: "打开辅助功能设置",
+      openAccessibility: "打开隐私与安全性 > 辅助功能",
       speechProvider: "语音识别",
       refineProvider: "润色模型",
       wakeWordCard: "唤醒词",
@@ -281,7 +282,7 @@ const UI = {
       diagnostics: "Environment diagnostics",
       refreshDiagnostics: "Refresh diagnostics",
       refreshingDiagnostics: "Refreshing...",
-      openAccessibility: "Open Accessibility settings",
+      openAccessibility: "Open Privacy & Security > Accessibility",
       speechProvider: "Speech recognition",
       refineProvider: "Refine model",
       wakeWordCard: "Wake word",
@@ -1567,7 +1568,7 @@ function DashboardApp() {
                   </button>
                 </div>
                 <div className="overview-diagnostics-grid">
-                  {[diagnostics.speech, diagnostics.refine, diagnostics.delivery].map((item) => (
+                  {[diagnostics.speech, diagnostics.refine, diagnostics.delivery, diagnostics.runtime].map((item) => (
                     <div
                       key={item.title}
                       className={`overview-diagnostic-card ${item.ready ? "ready" : "attention"}`}

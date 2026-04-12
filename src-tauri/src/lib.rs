@@ -31,6 +31,8 @@ use settings::{
 use text::normalize_to_simplified_chinese;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+#[cfg(target_os = "macos")]
+use tauri::ActivationPolicy;
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::PhysicalPosition;
@@ -39,9 +41,19 @@ use tauri::State;
 use tauri::utils::config::Color;
 use std::sync::{Mutex, OnceLock};
 #[cfg(target_os = "macos")]
+use std::ffi::c_void;
+#[cfg(target_os = "macos")]
 use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, CGKeyCode};
 #[cfg(target_os = "macos")]
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+#[cfg(target_os = "macos")]
+use core_foundation::base::TCFType;
+#[cfg(target_os = "macos")]
+use core_foundation::string::CFString;
+#[cfg(target_os = "macos")]
+use core_foundation_sys::base::{CFRelease, CFTypeRef};
+#[cfg(target_os = "macos")]
+use core_foundation_sys::string::CFStringRef;
 
 struct AppState {
     aura_core: tokio::sync::Mutex<Option<Arc<AuraCore>>>,
@@ -62,10 +74,103 @@ const CAPSULE_HEIGHT: u32 = 84;
 const CAPSULE_BOTTOM_OFFSET: i32 = 168;
 const AURA_BUNDLE_ID: &str = "com.bingo.aura";
 
-static LAST_FOCUSED_APP: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+#[derive(Clone, Debug)]
+struct FrontmostAppTarget {
+    bundle_id: String,
+    pid: Option<i32>,
+}
 
-fn last_focused_app() -> &'static Mutex<Option<String>> {
+static LAST_FOCUSED_APP: OnceLock<Mutex<Option<FrontmostAppTarget>>> = OnceLock::new();
+
+fn last_focused_app() -> &'static Mutex<Option<FrontmostAppTarget>> {
     LAST_FOCUSED_APP.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(target_os = "macos")]
+type AXUIElementRef = *const c_void;
+#[cfg(target_os = "macos")]
+type AXError = i32;
+#[cfg(target_os = "macos")]
+const K_AX_ERROR_SUCCESS: AXError = 0;
+
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn AXIsProcessTrusted() -> bool;
+    fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
+    fn AXUIElementCreateSystemWide() -> AXUIElementRef;
+    fn AXUIElementSetMessagingTimeout(element: AXUIElementRef, timeout_in_seconds: f32) -> AXError;
+    fn AXUIElementCopyAttributeValue(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        value: *mut CFTypeRef,
+    ) -> AXError;
+    fn AXUIElementIsAttributeSettable(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        settable: *mut u8,
+    ) -> AXError;
+    fn AXUIElementSetAttributeValue(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        value: CFTypeRef,
+    ) -> AXError;
+    fn AXUIElementPostKeyboardEvent(
+        application: AXUIElementRef,
+        key_char: u16,
+        virtual_key: CGKeyCode,
+        key_down: u8,
+    ) -> AXError;
+}
+
+#[cfg(target_os = "macos")]
+fn ax_focused_ui_element_attribute() -> CFString {
+    CFString::new("AXFocusedUIElement")
+}
+
+#[cfg(target_os = "macos")]
+fn ax_value_attribute() -> CFString {
+    CFString::new("AXValue")
+}
+
+#[cfg(target_os = "macos")]
+fn has_accessibility_permission() -> bool {
+    unsafe { AXIsProcessTrusted() }
+}
+
+#[cfg(target_os = "macos")]
+fn describe_ax_error(code: AXError) -> &'static str {
+    match code {
+        0 => "success",
+        -25200 => "failure",
+        -25201 => "illegal argument",
+        -25202 => "invalid ui element",
+        -25203 => "invalid ui element observer",
+        -25204 => "cannot complete",
+        -25205 => "attribute unsupported",
+        -25206 => "action unsupported",
+        -25207 => "notification unsupported",
+        -25208 => "not implemented",
+        -25209 => "notification already registered",
+        -25210 => "notification not registered",
+        -25211 => "api disabled",
+        -25212 => "no value",
+        -25213 => "parameterized attribute unsupported",
+        -25214 => "not enough precision",
+        _ => "unknown",
+    }
+}
+
+fn current_app_bundle_path() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    exe.ancestors()
+        .find(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("app"))
+                .unwrap_or(false)
+        })
+        .map(|path| path.to_path_buf())
 }
 
 #[derive(Debug, Serialize)]
@@ -125,6 +230,7 @@ struct EnvironmentDiagnostics {
     speech: DiagnosticStatus,
     refine: DiagnosticStatus,
     delivery: DiagnosticStatus,
+    runtime: DiagnosticStatus,
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,133 +256,12 @@ struct ProcessVoiceRequest {
 }
 
 #[cfg(target_os = "macos")]
-fn paste_into_focused_input_if_possible() -> std::io::Result<Option<bool>> {
-    if let Some(bundle_id) = last_focused_app().lock().ok().and_then(|guard| guard.clone()) {
-        if bundle_id != AURA_BUNDLE_ID {
-            log::info!("[Aura] Auto-paste targeting app {}", bundle_id);
-            let _ = std::process::Command::new("osascript")
-                .args([
-                    "-e",
-                    &format!(
-                        "tell application \"System Events\" to set frontmost of (first application process whose bundle identifier is \"{}\") to true\n delay 0.05",
-                        bundle_id
-                    ),
-                ])
-                .output();
-            std::thread::sleep(std::time::Duration::from_millis(180));
-        }
-    }
-
+fn capture_frontmost_app_target() -> Option<FrontmostAppTarget> {
     let script = r#"
 tell application "System Events"
     try
         set frontApp to first application process whose frontmost is true
-        set focusedElement to value of attribute "AXFocusedUIElement" of frontApp
-        set roleName to value of attribute "AXRole" of focusedElement
-        set editableValue to false
-        try
-            set editableValue to value of attribute "AXEditable" of focusedElement
-        end try
-
-        if editableValue is true or roleName is in {"AXTextField", "AXTextArea", "AXSearchField", "AXComboBox", "AXSecureTextField"} then
-            keystroke "v" using command down
-            return "pasted"
-        end if
-        return "not_editable"
-    on error errMsg number errNum
-        return "error:" & errNum & ":" & errMsg
-    end try
-
-    return "not_editable"
-end tell
-"#;
-
-    // Fallback: attempt a direct paste keystroke even if AX role check fails.
-    let fallback = r#"
-tell application "System Events"
-    try
-        keystroke "v" using command down
-        return "pasted"
-    on error errMsg number errNum
-        return "error:" & errNum & ":" & errMsg
-    end try
-end tell
-"#;
-
-    for attempt in 0..3 {
-        let output = std::process::Command::new("osascript")
-            .args(["-e", script])
-            .output()?;
-
-        let status = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-        if !output.status.success() {
-            if !stderr.is_empty() {
-                log::warn!("[Aura] Auto-paste script error: {}", stderr);
-                let lower = stderr.to_lowercase();
-                if lower.contains("not authorized to send apple events")
-                    || lower.contains("not authorised to send apple events")
-                {
-                    return Ok(None);
-                }
-            }
-            return Ok(None);
-        }
-
-        if status.starts_with("error:") {
-            log::warn!("[Aura] Auto-paste script result (attempt {}): {}", attempt + 1, status);
-        } else {
-            log::info!("[Aura] Auto-paste script result (attempt {}): {}", attempt + 1, status);
-        }
-        if status == "pasted" {
-            return Ok(Some(true));
-        }
-
-        let fallback_output = std::process::Command::new("osascript")
-            .args(["-e", fallback])
-            .output()?;
-
-        let fallback_status = String::from_utf8_lossy(&fallback_output.stdout).trim().to_string();
-        let fallback_err = String::from_utf8_lossy(&fallback_output.stderr).trim().to_string();
-
-        if !fallback_output.status.success() {
-            if !fallback_err.is_empty() {
-                log::warn!("[Aura] Auto-paste fallback error: {}", fallback_err);
-            }
-            return Ok(None);
-        }
-
-        if fallback_status.starts_with("error:") {
-            log::warn!(
-                "[Aura] Auto-paste fallback result (attempt {}): {}",
-                attempt + 1,
-                fallback_status
-            );
-        } else {
-            log::info!(
-                "[Aura] Auto-paste fallback result (attempt {}): {}",
-                attempt + 1,
-                fallback_status
-            );
-        }
-        if fallback_status == "pasted" {
-            return Ok(Some(true));
-        }
-
-        std::thread::sleep(std::time::Duration::from_millis(180));
-    }
-
-    Ok(Some(false))
-}
-
-#[cfg(target_os = "macos")]
-fn capture_frontmost_app_bundle_id() -> Option<String> {
-    let script = r#"
-tell application "System Events"
-    try
-        set frontApp to first application process whose frontmost is true
-        return bundle identifier of frontApp
+        return (bundle identifier of frontApp) & linefeed & (unix id of frontApp as text)
     on error
         return ""
     end try
@@ -292,12 +277,24 @@ end tell
         return None;
     }
 
-    let bundle_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if bundle_id.is_empty() {
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
         None
     } else {
-        log::info!("[Aura] Captured frontmost app: {}", bundle_id);
-        Some(bundle_id)
+        let mut parts = stdout.lines();
+        let bundle_id = parts.next()?.trim().to_string();
+        if bundle_id.is_empty() {
+            return None;
+        }
+        let pid = parts
+            .next()
+            .and_then(|value| value.trim().parse::<i32>().ok());
+        log::info!(
+            "[Aura] Captured frontmost app: {} pid={}",
+            bundle_id,
+            pid.map(|value| value.to_string()).unwrap_or_else(|| "unknown".to_string())
+        );
+        Some(FrontmostAppTarget { bundle_id, pid })
     }
 }
 
@@ -758,16 +755,26 @@ async fn get_environment_diagnostics(
         }
     };
 
+    let runtime_bundle = current_app_bundle_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "Unknown".to_string());
+    let expected_bundle = "/Applications/Aura.app";
     #[cfg(target_os = "macos")]
     let delivery = {
-        let permission_state = paste_into_focused_input_if_possible().ok().flatten();
+        let trusted = has_accessibility_permission();
+        let runtime_is_expected = runtime_bundle == expected_bundle;
         DiagnosticStatus {
-            ready: permission_state.is_some(),
+            ready: trusted,
             title: "Auto-paste".to_string(),
-            detail: match permission_state {
-                Some(true) => "Accessibility permission is available, and a text field is focused".to_string(),
-                Some(false) => "Accessibility permission is available. Focus a text input to verify auto-paste".to_string(),
-                None => "Automation permission is missing (System Events). Aura will fall back to clipboard only".to_string(),
+            detail: if trusted {
+                "Accessibility is active for the current Aura app. Aura will insert into the focused input when the target field accepts Accessibility or paste events.".to_string()
+            } else if runtime_is_expected {
+                "Aura is running from /Applications/Aura.app, but macOS is not trusting this rebuilt binary yet. This is usually a TCC mismatch after replacing the app. Remove Aura from Privacy & Security > Accessibility, add it again, then relaunch Aura.".to_string()
+            } else {
+                format!(
+                    "Aura is running from {} instead of {}. macOS permissions often bind to the installed app only, so auto-paste will fall back to the clipboard until you launch the installed copy.",
+                    runtime_bundle, expected_bundle
+                )
             },
         }
     };
@@ -779,10 +786,24 @@ async fn get_environment_diagnostics(
         detail: "Auto-paste diagnostics are currently optimized for macOS".to_string(),
     };
 
+    let runtime = DiagnosticStatus {
+        ready: runtime_bundle == expected_bundle,
+        title: "App identity".to_string(),
+        detail: if runtime_bundle == expected_bundle {
+            format!("Running from {}. Permissions should bind to this installed app.", runtime_bundle)
+        } else {
+            format!(
+                "Running from {}. For stable macOS permissions, use only {}.",
+                runtime_bundle, expected_bundle
+            )
+        },
+    };
+
     Ok(EnvironmentDiagnostics {
         speech,
         refine,
         delivery,
+        runtime,
     })
 }
 
@@ -902,23 +923,66 @@ async fn type_text(text: String, app: tauri::AppHandle) -> Result<PasteResult, S
 
     #[cfg(target_os = "macos")]
     {
+        let _ = app.set_activation_policy(ActivationPolicy::Accessory);
         if let Some(window) = app.get_webview_window("capsule") {
             let _ = window.hide();
         }
 
-        if let Some(bundle_id) = last_focused_app().lock().ok().and_then(|guard| guard.clone()) {
-            if bundle_id != AURA_BUNDLE_ID {
-                log::info!("[Aura] Re-activating target app {}", bundle_id);
+        if let Some(target) = last_focused_app().lock().ok().and_then(|guard| guard.clone()) {
+            if target.bundle_id != AURA_BUNDLE_ID {
+                log::info!("[Aura] Re-activating target app {}", target.bundle_id);
                 let _ = std::process::Command::new("open")
-                    .args(["-b", &bundle_id])
+                    .args(["-b", &target.bundle_id])
                     .output();
             }
         }
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(180)).await;
-        tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(420)).await;
+        if let Some(frontmost) = capture_frontmost_app_target() {
+            log::info!(
+                "[Aura] Frontmost app before delivery: {} pid={}",
+                frontmost.bundle_id,
+                frontmost
+                    .pid
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            );
+        }
+        let target_pid = last_focused_app()
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .and_then(|target| target.pid);
+        match set_focused_input_value(target_pid, &delivered_text) {
+            Ok(()) => {
+                log::info!("[Aura] Delivery: inserted via AX value");
+                let _ = app.set_activation_policy(ActivationPolicy::Regular);
+                return Ok(PasteResult {
+                    text: delivered_text,
+                    delivered: true,
+                    copied_to_clipboard: true,
+                    message: "Inserted into the active input.".to_string(),
+                });
+            }
+            Err(error) => {
+                log::warn!("[Aura] AX direct insert failed: {}", error);
+            }
+        }
+
+        if send_ax_paste_shortcut(target_pid).is_ok() {
+            log::info!("[Aura] Delivery: pasted via AX keyboard event");
+            let _ = app.set_activation_policy(ActivationPolicy::Regular);
+            return Ok(PasteResult {
+                text: delivered_text,
+                delivered: true,
+                copied_to_clipboard: true,
+                message: "Pasted into the active input.".to_string(),
+            });
+        }
+
         if send_paste_shortcut().is_ok() {
             log::info!("[Aura] Delivery: pasted via CGEvent");
+            let _ = app.set_activation_policy(ActivationPolicy::Regular);
             return Ok(PasteResult {
                 text: delivered_text,
                 delivered: true,
@@ -928,6 +992,7 @@ async fn type_text(text: String, app: tauri::AppHandle) -> Result<PasteResult, S
         }
 
         log::warn!("[Aura] Delivery: clipboard only because CGEvent paste failed");
+        let _ = app.set_activation_policy(ActivationPolicy::Regular);
         return Ok(PasteResult {
             text: delivered_text,
             delivered: false,
@@ -989,20 +1054,176 @@ async fn type_text(text: String, app: tauri::AppHandle) -> Result<PasteResult, S
 }
 
 #[cfg(target_os = "macos")]
-fn send_paste_shortcut() -> Result<(), String> {
+fn post_keyboard_event(
+    keycode: CGKeyCode,
+    is_key_down: bool,
+    flags: CGEventFlags,
+) -> Result<(), String> {
     let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
         .map_err(|_| "CGEventSource init failed".to_string())?;
-    let keycode_v: CGKeyCode = 0x09;
-    let mut key_down = CGEvent::new_keyboard_event(source, keycode_v, true)
-        .map_err(|_| "Failed to create key down event".to_string())?;
-    key_down.set_flags(CGEventFlags::CGEventFlagCommand);
-    key_down.post(CGEventTapLocation::HID);
+    let event = CGEvent::new_keyboard_event(source, keycode, is_key_down)
+        .map_err(|_| "Failed to create keyboard event".to_string())?;
+    event.set_flags(flags);
+    event.post(CGEventTapLocation::HID);
+    Ok(())
+}
 
-    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
-        .map_err(|_| "CGEventSource init failed".to_string())?;
-    let key_up = CGEvent::new_keyboard_event(source, keycode_v, false)
-        .map_err(|_| "Failed to create key up event".to_string())?;
-    key_up.post(CGEventTapLocation::HID);
+#[cfg(target_os = "macos")]
+fn set_focused_input_value(target_pid: Option<i32>, text: &str) -> Result<(), String> {
+    unsafe {
+        let focused_attr = ax_focused_ui_element_attribute();
+        let value_attr = ax_value_attribute();
+        let mut focused: CFTypeRef = std::ptr::null_mut();
+        let mut last_copy_err = K_AX_ERROR_SUCCESS;
+
+        for candidate in [None, target_pid] {
+            let root = if let Some(pid) = candidate {
+                AXUIElementCreateApplication(pid)
+            } else {
+                AXUIElementCreateSystemWide()
+            };
+            if root.is_null() {
+                continue;
+            }
+
+            let copy_err =
+                AXUIElementCopyAttributeValue(root, focused_attr.as_concrete_TypeRef(), &mut focused);
+            CFRelease(root as CFTypeRef);
+            last_copy_err = copy_err;
+
+            if copy_err == K_AX_ERROR_SUCCESS && !focused.is_null() {
+                break;
+            }
+        }
+
+        if focused.is_null() {
+            return Err(format!(
+                "AX focus lookup failed: {} ({})",
+                last_copy_err,
+                describe_ax_error(last_copy_err)
+            ));
+        }
+
+        let mut settable: u8 = 0;
+        let settable_err = AXUIElementIsAttributeSettable(
+            focused as AXUIElementRef,
+            value_attr.as_concrete_TypeRef(),
+            &mut settable,
+        );
+        if settable_err != K_AX_ERROR_SUCCESS {
+            CFRelease(focused);
+            return Err(format!(
+                "AX value settable check failed: {} ({})",
+                settable_err,
+                describe_ax_error(settable_err)
+            ));
+        }
+        if settable == 0 {
+            CFRelease(focused);
+            return Err("AX focused element is not settable".to_string());
+        }
+
+        let value = CFString::new(text);
+        let set_err = AXUIElementSetAttributeValue(
+            focused as AXUIElementRef,
+            value_attr.as_concrete_TypeRef(),
+            value.as_CFTypeRef(),
+        );
+        CFRelease(focused);
+
+        if set_err != K_AX_ERROR_SUCCESS {
+            return Err(format!(
+                "AX value set failed: {} ({})",
+                set_err,
+                describe_ax_error(set_err)
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn send_ax_paste_shortcut(target_pid: Option<i32>) -> Result<(), String> {
+    unsafe {
+        let application = if let Some(pid) = target_pid {
+            AXUIElementCreateApplication(pid)
+        } else {
+            AXUIElementCreateSystemWide()
+        };
+
+        if application.is_null() {
+            return Err("AX application init failed".to_string());
+        }
+
+        let timeout_err = AXUIElementSetMessagingTimeout(application, 1.2);
+        if timeout_err != K_AX_ERROR_SUCCESS {
+            CFRelease(application as CFTypeRef);
+            return Err(format!(
+                "AX messaging timeout failed: {} ({})",
+                timeout_err,
+                describe_ax_error(timeout_err)
+            ));
+        }
+
+        let command_down = AXUIElementPostKeyboardEvent(application, 0, 0x37, 1);
+        if command_down != K_AX_ERROR_SUCCESS {
+            CFRelease(application as CFTypeRef);
+            return Err(format!(
+                "AX command down failed: {} ({})",
+                command_down,
+                describe_ax_error(command_down)
+            ));
+        }
+
+        let v_down = AXUIElementPostKeyboardEvent(application, b'v' as u16, 0x09, 1);
+        if v_down != K_AX_ERROR_SUCCESS {
+            let _ = AXUIElementPostKeyboardEvent(application, 0, 0x37, 0);
+            CFRelease(application as CFTypeRef);
+            return Err(format!(
+                "AX V down failed: {} ({})",
+                v_down,
+                describe_ax_error(v_down)
+            ));
+        }
+
+        let v_up = AXUIElementPostKeyboardEvent(application, b'v' as u16, 0x09, 0);
+        let command_up = AXUIElementPostKeyboardEvent(application, 0, 0x37, 0);
+        CFRelease(application as CFTypeRef);
+
+        if v_up != K_AX_ERROR_SUCCESS {
+            return Err(format!(
+                "AX V up failed: {} ({})",
+                v_up,
+                describe_ax_error(v_up)
+            ));
+        }
+        if command_up != K_AX_ERROR_SUCCESS {
+            return Err(format!(
+                "AX command up failed: {} ({})",
+                command_up,
+                describe_ax_error(command_up)
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn send_paste_shortcut() -> Result<(), String> {
+    const NX_DEVICELCMDKEYMASK_BITS: u64 = 0x0000_0008;
+    let command_flags =
+        CGEventFlags::CGEventFlagCommand | CGEventFlags::from_bits_retain(NX_DEVICELCMDKEYMASK_BITS);
+    let keycode_command: CGKeyCode = 0x37;
+    let keycode_v: CGKeyCode = 0x09;
+    post_keyboard_event(keycode_command, true, command_flags)?;
+    std::thread::sleep(std::time::Duration::from_millis(16));
+    post_keyboard_event(keycode_v, true, command_flags)?;
+    std::thread::sleep(std::time::Duration::from_millis(16));
+    post_keyboard_event(keycode_v, false, command_flags)?;
+    std::thread::sleep(std::time::Duration::from_millis(16));
+    post_keyboard_event(keycode_command, false, CGEventFlags::empty())?;
     Ok(())
 }
 
@@ -1113,9 +1334,10 @@ fn setup_global_hotkeys(
             *rec = true;
 
             if let Some(window) = app_handle_for_window.get_webview_window("capsule") {
-                if let Some(bundle_id) = capture_frontmost_app_bundle_id() {
+                let _ = app_handle_for_window.set_activation_policy(ActivationPolicy::Accessory);
+                if let Some(target) = capture_frontmost_app_target() {
                     if let Ok(mut guard) = last_focused_app().lock() {
-                        *guard = Some(bundle_id);
+                        *guard = Some(target);
                     }
                 }
                 let _ = window.set_always_on_top(true);
