@@ -3,6 +3,10 @@
 Aura is an open-source, free, privacy-first voice refinement tool. Its core experience is the capsule: press a hotkey to record, press again to finish, then Aura transcribes and refines your speech and inserts the result into the active input field (or falls back to clipboard).
 
 Aura is inspired by the Typeless interaction model, but built independently with its own implementation and product identity.
+![screenshot](assets/1.png)
+![screenshot](assets/2.png)
+![screenshot](assets/output.gif)
+
 
 ## Highlights
 
